@@ -1,5 +1,6 @@
 import torch
-from torch.distributions import Normal, Uniform, Categorical
+from torch.distributions import Uniform, Categorical
+from smc.distributions import TruncatedDiagonalMVN
 
 class PointProcessPrior(object):
     def __init__(self,
@@ -60,13 +61,18 @@ class PointProcessPrior(object):
 class StarPrior(PointProcessPrior):
     def __init__(self,
                  *args,
-                 flux_scale,
-                 flux_shape,
+                 flux_mean,
+                 flux_stdev,
+                 flux_min,
+                 flux_max,
                  **kwargs):
         super().__init__(*args, **kwargs)
-        self.flux_scale = flux_scale
-        self.flux_shape = flux_shape
-        self.feature_prior = Normal(self.flux_scale, self.flux_shape)
+        self.flux_mean = flux_mean * torch.ones(1)
+        self.flux_stdev = flux_stdev * torch.ones(1)
+        self.flux_min = flux_min * torch.ones(1)
+        self.flux_max = flux_max * torch.ones(1)
+        self.feature_prior = TruncatedDiagonalMVN(self.flux_mean, self.flux_stdev,
+                                                  self.flux_min, self.flux_max)
     
     def sample(self,
                num_catalogs = 1,
@@ -77,7 +83,7 @@ class StarPrior(PointProcessPrior):
                                       stratify_by_count, num_catalogs_per_count)
         
         features = self.feature_prior.sample([num_tiles_per_side, num_tiles_per_side,
-                                              self.num, self.max_objects]).clamp(min = 0.0)
+                                              self.num, self.max_objects])
         features *= self.count_indicator
         
         return [counts, locs, features]
@@ -87,5 +93,5 @@ class StarPrior(PointProcessPrior):
         log_prior = super().log_prob(counts, locs)
         
         # add fudge to dummy vals before log_prob because the empty slots in features are zeros
-        fudge = 0 # for Pareto fluxes: self.feature_prior.scale
+        fudge = self.feature_prior.base_dist.mean
         return log_prior + (self.feature_prior.log_prob(features + fudge * (features == 0)) * self.count_indicator).sum(-1)
